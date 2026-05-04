@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import kagglehub
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms, models
+from PIL import Image
 
 print("Downloading dataset...")
 path = kagglehub.dataset_download("paultimothymooney/chest-xray-pneumonia")
@@ -57,7 +58,6 @@ class GradCAM:
 
     def generate_heatmap(self, input_tensor, class_idx):
         self.model.eval()
-
         input_tensor.requires_grad_(True)
 
         output = self.model(input_tensor)
@@ -67,15 +67,14 @@ class GradCAM:
         score.backward()
 
         if self.gradients is None:
-            return np.zeros((224, 224))  # Fallback if gradient capture fails
+            return np.zeros((224, 224))
 
-
+        # Global average pooling of gradients
         alpha = torch.mean(self.gradients, dim=[2, 3], keepdim=True)
-
         weighted_activations = alpha * self.activations
         heatmap = torch.sum(weighted_activations, dim=1).squeeze()
 
-
+        # ReLU on heatmap
         heatmap = torch.maximum(heatmap, torch.tensor(0))
 
         if torch.max(heatmap) > 0:
@@ -108,10 +107,10 @@ def train():
         print(f"Epoch {epoch + 1} Loss: {total_loss / len(train_loader):.4f}")
 
 
-def visualize_result(img_path):
+def visualize_result(img_path, threshold=0.3):
+
     raw_img = cv2.imread(img_path)
     img_rgb = cv2.cvtColor(raw_img, cv2.COLOR_BGR2RGB)
-    from PIL import Image
     pil_img = Image.open(img_path).convert('RGB')
     input_tensor = transform(pil_img).unsqueeze(0).to(device)
 
@@ -121,41 +120,49 @@ def visualize_result(img_path):
         probabilities = torch.nn.functional.softmax(output, dim=1)
         conf, pred = torch.max(probabilities, 1)
 
-        class_names = train_dataset.classes  # ['NORMAL', 'PNEUMONIA']
-        prediction_label = class_names[pred.item()]
-        confidence_score = conf.item() * 100
+    class_names = train_dataset.classes  # ['NORMAL', 'PNEUMONIA']
+    prediction_label = class_names[pred.item()]
+
 
     cam = GradCAM(model, model.layer4[-1])
-    heatmap = cam.generate_heatmap(input_tensor, class_idx=pred.item())
-    heatmap = cv2.resize(heatmap, (img_rgb.shape[1], img_rgb.shape[0]))
-    heatmap = np.uint8(255 * heatmap)
-    heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    heatmap_raw = cam.generate_heatmap(input_tensor, class_idx=pred.item())
+    heatmap_resized = cv2.resize(heatmap_raw, (img_rgb.shape[1], img_rgb.shape[0]))
+    affected_mask = (heatmap_resized > threshold).astype(np.uint8)
+    affected_pixels = np.sum(affected_mask)
+    total_pixels = heatmap_resized.size
+    affected_percentage = (affected_pixels / total_pixels) * 100
+    display_percentage = affected_percentage if prediction_label == 'PNEUMONIA' else 0.0
+    heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
     superimposed = cv2.addWeighted(img_rgb, 0.6, heatmap_color, 0.4, 0)
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 2, 1)
+
+    plt.figure(figsize=(18, 6))
+
+
+    plt.subplot(1, 3, 1)
     plt.imshow(img_rgb)
-    plt.title(f"Original X-Ray\n(Actual: {os.path.basename(os.path.dirname(img_path))})")
+    plt.title(f"Original X-Ray\nActual: {os.path.basename(os.path.dirname(img_path))}")
     plt.axis('off')
-
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
     plt.imshow(superimposed)
-
-    plt.title(f"AI Prediction: {prediction_label}\nConfidence: {confidence_score:.2f}%")
+    plt.title(f"AI Prediction: {prediction_label}\nConfidence: {conf.item() * 100:.2f}%")
+    plt.axis('off')
+    plt.subplot(1, 3, 3)
+    plt.imshow(affected_mask, cmap='gray')
+    plt.title(f"Affected Area Mask (>{threshold * 100}% Intensity)\nCalculated Area: {display_percentage:.2f}%")
     plt.axis('off')
 
     plt.tight_layout()
     plt.show()
 
-
 if __name__ == "__main__":
     train()
 
     categories = ['NORMAL', 'PNEUMONIA']
-
     for cat in categories:
         cat_path = os.path.join(test_dir, cat)
         if os.path.exists(cat_path):
-            sample_img = os.listdir(cat_path)[0]
-            img_full_path = os.path.join(cat_path, sample_img)
-            print(f"Processing category: {cat}")
-            visualize_result(img_full_path)
+            files = [f for f in os.listdir(cat_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            if files:
+                img_full_path = os.path.join(cat_path, files[0])
+                print(f"Processing category: {cat}")
+                visualize_result(img_full_path)
