@@ -6,17 +6,13 @@ import yaml
 import kagglehub
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms, models
-
 try:
     with open("config.yaml", "r") as f:
         config = yaml.safe_load(f)
     ALERT_THRESHOLD = config['email_settings']['threshold_percentage']
 except Exception as e:
     print(f"Error loading config.yaml: {e}")
-    # Default threshold if config fails
     ALERT_THRESHOLD = 80
-
-# 2. Data Setup
 print("Downloading dataset...")
 path = kagglehub.dataset_download("paultimothymooney/chest-xray-pneumonia")
 train_dir = os.path.join(path, 'chest_xray', 'train')
@@ -31,26 +27,19 @@ train_dataset = datasets.ImageFolder(train_dir, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=0) # Set to 0 for Windows stability
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# 3. Model Definition
 def get_model():
     model = models.resnet18(weights='DEFAULT')
     for param in model.parameters():
         param.requires_grad = False
     model.fc = nn.Linear(model.fc.in_features, 2)
     return model.to(device)
-
-# 4. Severity Logic (Defined as a reusable function)
 def get_severity(prob):
-    """Maps probability to clinical severity levels."""
     if prob < 0.3:
         return "Low/Normal", "green"
     elif prob < 0.6:
         return "Moderate", "orange"
     else:
         return "Severe", "red"
-
-# 5. Training Function
 def train(model):
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.fc.parameters(), lr=0.001)
@@ -68,6 +57,7 @@ def train(model):
             optimizer.step()
             total_loss += loss.item()
         print(f"Epoch {epoch + 1} Loss: {total_loss / len(train_loader):.4f}")
+
 
 if __name__ == "__main__":
     model_instance = get_model()

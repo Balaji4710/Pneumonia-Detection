@@ -3,24 +3,10 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torchvision import models, transforms
-# Import the shared logic from your main script
 from main import get_severity
-
-# 1. Page Configuration
-st.set_page_config(page_title="Pneumonia AI Diagnostic", page_icon="🧪", layout="wide")
-
-# 2. UI Styling (Fixes white background bug)
-st.markdown("""
-    <style>
-    [data-testid="stMetric"] {
-        background-color: rgba(255, 255, 255, 0.05); 
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    </style>
-    """, unsafe_allow_html=True)
+from database import init_db, save_to_db
+st.set_page_config(page_title="Pneumonia Diagnosis through AI", layout="wide")
+init_db()
 
 
 @st.cache_resource
@@ -30,9 +16,10 @@ def load_model():
     try:
         model.load_state_dict(torch.load("pneumonia_model.pth", map_location="cpu"))
         model.eval()
+        return model
     except FileNotFoundError:
-        st.error("🚨 'pneumonia_model.pth' not found! Run main.py first.")
-    return model
+        st.error("🚨 'pneumonia_model.pth' not found!")
+        return None
 
 
 def predict(image, model):
@@ -50,52 +37,53 @@ def predict(image, model):
 
 
 def main():
-    st.title("🫁 Chest X-Ray Diagnostic Portal")
-    st.write("Upload a digital X-ray for AI-assisted pneumonia screening.")
-    st.divider()
+    st.title("🫁 Pneumonia AI Diagnostic Portal")
+    st.markdown(
+        "<span style='color:red'>Upload an X-ray to Detect Pneumonia or Normal. Disclaimer: !! Records are stored in the backend for training purposes.</span>",
+        unsafe_allow_html=True
+    )
 
     with st.sidebar:
-        st.header("Upload Data")
-        uploaded_file = st.file_uploader("Select X-Ray Image", type=["jpg", "jpeg", "png"])
-        if st.button("Reset App"):
-            st.rerun()
+        st.header("Patient Profile")
+        p_name = st.text_input("Patient Name")
+        p_age = st.number_input("Age", min_value=0, max_value=120, value=30)
+        p_sex = st.selectbox("Sex", ["Male", "Female", "Other"])
+        p_weight = st.number_input("Weight", min_value=0.0, max_value=100.0, value=0.0 , step=0.1)
+        p_height = st.number_input("Height", min_value=0.0, max_value=500.0, value=0.0 , step=0.01)
+        p_work = st.text_input("Provide the Patient's Occupation ")
+        st.divider()
+        uploaded_file = st.file_uploader("Upload Chest X-Ray", type=["jpg", "jpeg", "png"])
 
     if uploaded_file:
         image = Image.open(uploaded_file).convert('RGB')
-        col1, col2 = st.columns([1.2, 1])
+        col1, col2 = st.columns([1, 1])
 
         with col1:
-            st.subheader("Inspection View")
-            st.image(image, use_container_width=True)
+            st.image(image, use_container_width=True, caption="Current Scan")
 
         with col2:
-            st.subheader("AI Analysis Report")
             model = load_model()
             if model:
-                label_idx, conf, all_probs = predict(image, model)
+                label_idx, confidence, all_probs = predict(image, model)
                 label = "PNEUMONIA" if label_idx == 1 else "NORMAL"
+                sev_label, color = get_severity(all_probs[1])
 
-                # Use the imported severity logic
-                pneumonia_prob = all_probs[1]
-                severity_label, color = get_severity(pneumonia_prob)
+                st.subheader("Diagnostic Report")
+                if label == "PNEUMONIA":
+                    st.error(f"Detection: {label}")
+                else:
+                    st.success(f"Detection: {label}")
 
-                res_col1, res_col2 = st.columns(2)
-                with res_col1:
-                    if label == "PNEUMONIA":
-                        st.error(f"**Result:** {label}")
+                st.metric("Confidence Score", f"{confidence * 100:.2f}%")
+                st.markdown(f"**Severity Level:** :{color}[{sev_label}]")
+
+
+                if st.button("💾 Confirm & Archive Diagnosis"):
+                    if p_name.strip():
+                        save_to_db(p_name, p_age, p_sex, label, sev_label, confidence)
+                        st.toast(f"Record for {p_name} successfully stored in backend database.", icon="✅")
                     else:
-                        st.success(f"**Result:** {label}")
-                with res_col2:
-                    st.metric("Infection Severity", severity_label)
-
-                st.markdown(f"**Clinical Status:** :{color}[{severity_label}] ({conf * 100:.1f}%)")
-                st.bar_chart({"Probability": all_probs})
-
-                st.divider()
-                if st.button("Confirm Diagnosis & Log"):
-                    st.toast(f"Logged: {severity_label}", icon="✅")
-    else:
-        st.info("👋 Please upload a chest X-ray in the sidebar.")
+                        st.warning("⚠️ Enter patient name to save record.")
 
 
 if __name__ == "__main__":
